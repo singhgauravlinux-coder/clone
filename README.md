@@ -239,9 +239,13 @@ validation rules (they compose).
   environment. `ci.yml` lints it, renders all three values files and runs
   kubeconform against the output, so the first CI run is the first real test.
   Budget a fix or two.
-- **`backend/go.sum` is missing** and CI needs it. Run `go mod tidy` once and
-  commit the result before the first push, or the backend job fails on
-  `go mod download`.
+- **`backend/go.sum` is missing** and CI needs it. Run `go mod tidy` in
+  `backend/` once and commit the result. CI falls back to generating it with a
+  warning annotation so the pipeline is not blocked, but a checksum file
+  generated in CI is not a lockfile.
+- **Action pins drift.** Every `uses:` was re-resolved against the live tag
+  lists; majors move faster than they look. A pin that does not exist fails the
+  run immediately, so re-check them when you fork.
 - **The Go service is not compiled here.** This environment cannot reach the
   module proxy, so `go build` was never run. Every file parses (`gofmt -e`) and
   the packages are internally consistent, but expect to fix a handful of things
