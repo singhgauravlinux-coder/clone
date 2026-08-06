@@ -22,18 +22,18 @@ jobs:
       name: ${{ inputs.environment }}
       url: ${{ inputs.url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
-          version: v3.15.3
+          version: v3.21.3
 
       # Cluster access. KUBE_CONFIG is a base64 kubeconfig held as an
       # environment secret, so staging and production credentials are separate
       # and production's is gated by the same approval as the deploy.
       #
       # On EKS, GKE or AKS prefer federated OIDC and delete this step:
-      #   - uses: aws-actions/configure-aws-credentials@v4
+      #   - uses: aws-actions/configure-aws-credentials@v6
       #     with:
       #       role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
       #       aws-region: eu-west-1
