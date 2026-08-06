@@ -35,11 +35,19 @@ git add go.sum go.mod && git commit -m "add go.sum"
 ```
 
 Without it the backend job fails with `missing go.sum entry for module
-providing package …` on every import. CI has a fallback that runs `go mod tidy`
-itself and emits a warning annotation, so the pipeline is not blocked, but a
-generated-in-CI checksum file defeats the point of having one: the build is no
-longer reproducible, and a dependency substituted upstream would not be caught.
-Commit the file.
+providing package …` on every import.
+
+CI runs `go mod tidy` unconditionally and warns if it had to change anything,
+so a fresh clone is never blocked. Do not rely on that: a checksum file
+generated in CI is not a lockfile, the build stops being reproducible, and a
+dependency substituted upstream would go unnoticed. Commit the file.
+
+**Watch for the trap that caused this:** `go mod download` reads `go.mod` and
+nothing else. A module the code imports but `go.mod` never listed — `k8s.io/api`
+was the one here — downloads perfectly and then fails at build time with a
+"missing go.sum entry" that names the *other* dependencies. `go mod tidy`
+resolves from the real import graph, which is why CI now always tidies rather
+than branching on whether a lockfile exists.
 
 ### 1a. Action versions
 

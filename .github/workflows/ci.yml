@@ -59,17 +59,24 @@ jobs:
           cache-dependency-path: backend/go.mod
       - name: Resolve dependencies
         working-directory: backend
-        # A committed go.sum is what makes a build reproducible, so the normal
-        # path only downloads and verifies. Generating one here is a fallback
-        # that keeps CI usable on a fresh clone, and it says so loudly.
+        # Always tidy, never branch on whether go.sum exists.
+        #
+        # `go mod download` reads go.mod alone, so a module that the code
+        # imports but go.mod does not list downloads clean and then fails at
+        # build time. Tidying resolves from the actual import graph, which is
+        # the only thing that cannot disagree with the code.
+        #
+        # The diff afterwards is the honest part: if tidy had to change
+        # anything, the committed lockfile was stale and the build is no longer
+        # reproducible. That warns rather than fails, so a fresh clone is not
+        # blocked.
         run: |
-          if [ -f go.sum ]; then
-            go mod download
-            go mod verify
-          else
-            echo "::warning title=go.sum missing::Generating it in CI. Run 'go mod tidy' locally and commit the result for reproducible builds."
-            go mod tidy
+          go mod tidy
+          if ! git diff --quiet -- go.mod go.sum; then
+            echo "::warning title=go.mod or go.sum is out of date::CI regenerated them. Run 'go mod tidy' in backend/ and commit the result."
+            git --no-pager diff --stat -- go.mod go.sum
           fi
+          go mod verify
       - name: Formatting
         working-directory: backend
         # gofmt -l prints files that differ; any output is a failure.

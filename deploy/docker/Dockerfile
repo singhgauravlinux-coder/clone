@@ -12,8 +12,12 @@ FROM golang:1.22-alpine AS api
 WORKDIR /src
 RUN apk add --no-cache git
 COPY backend/go.mod backend/go.sum* ./
-RUN go mod download
+# go.sum is optional here: a fresh clone may not have one committed yet, and a
+# build that fails on its absence is a worse outcome than one that resolves it.
+RUN go mod download || go mod tidy
 COPY backend/ ./
+# Tidy again now the sources are present: the first pass only saw go.mod.
+RUN go mod tidy
 # Static build: the runtime image has no libc.
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/workbench .
 
