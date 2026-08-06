@@ -1,0 +1,207 @@
+# Runs on every push and pull request. Nothing here needs a cluster, a registry
+# login or a cloud role: CI proves the code is correct, CD proves it deploys.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        working-directory: frontend
+        run: npm ci
+      - name: Type check
+        working-directory: frontend
+        run: npm run typecheck
+      - name: Test
+        working-directory: frontend
+        # YAML round trips, all sixteen resource definitions, topology,
+        # deployment verbs, activity filters and CSV export.
+        run: npm test
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+          retention-days: 7
+
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: backend/go.sum
+      - name: Formatting
+        working-directory: backend
+        # gofmt -l prints files that differ; any output is a failure.
+        run: test -z "$(gofmt -l .)" || { gofmt -d .; exit 1; }
+      - name: Vet
+        working-directory: backend
+        run: go vet ./...
+      - name: Test
+        working-directory: backend
+        run: go test -race -coverprofile=coverage.out ./...
+      - name: Build
+        working-directory: backend
+        run: CGO_ENABLED=0 go build -trimpath ./...
+
+  database:
+    name: database
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: workbench
+          # Trust auth so the suite can connect as workbench_app, the
+          # unprivileged role the row level security tests depend on.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGDATABASE: workbench
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install psql
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Apply migrations
+        run: |
+          for file in db/migrations/*.sql; do
+            echo "applying $file"
+            psql -U postgres -v ON_ERROR_STOP=1 -q -f "$file"
+          done
+      - name: Schema behaviour
+        # Append-only enforcement, the audit hash chain, updated_at triggers,
+        # per-tenant uniqueness.
+        run: psql -U postgres -v ON_ERROR_STOP=1 -q -f db/tests/verify.sql
+      - name: Tenant isolation
+        # Deliberately unscoped queries as the application role must return
+        # nothing rather than another tenant's rows.
+        run: psql -U workbench_app -v ON_ERROR_STOP=1 -q -f db/tests/rls.sql
+      - name: Inventory behaviour
+        # UID identity, managed vs observed, label containment, and a sync that
+        # marks what it did not see without touching another cluster.
+        # Runs last: it adds rows the isolation counts depend on.
+        run: psql -U postgres -v ON_ERROR_STOP=1 -q -f db/tests/inventory.sql
+      - name: Impersonation rules
+        # Username templates, group derivation, and the two escalation guards:
+        # no system:masters, no newline in an impersonation header.
+        run: psql -U postgres -v ON_ERROR_STOP=1 -q -f db/tests/impersonation.sql
+      - name: Migrations are append-only
+        # A changed migration is a schema that two environments disagree about.
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          changed=$(git diff --diff-filter=MD --name-only "origin/${{ github.base_ref }}" -- db/migrations || true)
+          if [ -n "$changed" ]; then
+            echo "these migrations were modified or deleted; add a new one instead:"
+            echo "$changed"
+            exit 1
+          fi
+
+  manifests:
+    name: manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.15.3
+      - name: Lint chart
+        run: helm lint deploy/helm --values deploy/helm/values.yaml
+      - name: Render every environment
+        run: |
+          mkdir -p rendered
+          for values in deploy/helm/values.yaml deploy/helm/values-staging.yaml deploy/helm/values-production.yaml; do
+            name=$(basename "$values" .yaml)
+            helm template workbench deploy/helm --values "$values" > "rendered/$name.yaml"
+          done
+      - name: Validate against the Kubernetes schema
+        run: |
+          curl -sSL -o kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz
+          tar xf kubeconform.tar.gz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.30.0 rendered/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rendered-manifests
+          path: rendered/
+          retention-days: 7
+
+  image:
+    name: image
+    runs-on: ubuntu-latest
+    # No registry credentials on a pull request: build and scan only.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          push: false
+          load: true
+          tags: manifest-workbench:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: manifest-workbench:ci
+          format: sarif
+          output: trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+      - name: Publish scan results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+        continue-on-error: true
+
+  secrets-scan:
+    name: secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

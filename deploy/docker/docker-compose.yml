@@ -1,0 +1,44 @@
+# Local stack. Everything binds to localhost only; nothing here is production
+# configuration, and the passwords are deliberately obvious.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: workbench
+      POSTGRES_PASSWORD: workbench
+      POSTGRES_DB: workbench
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Migrations run in lexical order on first boot.
+      - ../../db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workbench"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports: ["127.0.0.1:6379:6379"]
+
+  api:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_started}
+    environment:
+      ADDR: ":8080"
+      WEB_DIR: /app/web
+      DATABASE_URL: postgres://workbench:workbench@postgres:5432/workbench?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      # Replace before exposing this to anyone.
+      JWT_SIGNING_KEY: dev-only-change-me-0123456789abcdef
+      KMS_KEY_ID: local-dev
+    ports: ["127.0.0.1:8080:8080"]
+
+volumes:
+  pgdata:

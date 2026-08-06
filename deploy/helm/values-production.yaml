@@ -1,0 +1,34 @@
+# Production: spread across zones, autoscaled, disruption budgeted.
+replicaCount: 3
+
+ingress:
+  host: workbench.example.com
+  tls:
+    enabled: true
+    secretName: workbench-tls
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 65
+
+resources:
+  requests: {cpu: 500m, memory: 512Mi}
+  limits: {memory: 2Gi}
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+topologySpreadConstraints:
+  enabled: true
+  topologyKey: topology.kubernetes.io/zone
+
+networkPolicy:
+  enabled: true
+  allowedCIDRs:
+    - 10.0.0.0/8        # in-region API servers
+    - 172.16.0.0/12     # peered clusters
+
+logLevel: info

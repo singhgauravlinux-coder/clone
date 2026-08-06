@@ -1,0 +1,29 @@
+# Staging: one replica, permissive timeouts, real TLS, throwaway data.
+replicaCount: 1
+
+ingress:
+  host: workbench.staging.example.com
+  tls:
+    enabled: true
+    secretName: workbench-staging-tls
+
+autoscaling:
+  enabled: false
+
+resources:
+  requests: {cpu: 100m, memory: 192Mi}
+  limits: {memory: 512Mi}
+
+podDisruptionBudget:
+  enabled: false
+
+# Staging talks to its own database and its own clusters. Nothing here shares a
+# secret with production, so a leak in staging is not a production incident.
+database:
+  existingSecret: workbench-staging-database
+redis:
+  existingSecret: workbench-staging-redis
+auth:
+  existingSecret: workbench-staging-auth
+
+logLevel: debug

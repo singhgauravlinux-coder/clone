@@ -1,0 +1,92 @@
+replicaCount: 2
+
+image:
+  repository: ghcr.io/acme/manifest-workbench
+  tag: ""          # defaults to appVersion
+  # CI sets this to the digest it built and signed. A digest beats a tag:
+  # tags move, digests do not.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  host: workbench.example.com
+  tls:
+    enabled: true
+    secretName: workbench-tls
+
+# The platform reads clusters through its own service account when running
+# in-cluster, and through stored credentials for every other cluster.
+serviceAccount:
+  create: true
+  annotations: {}
+
+database:
+  # Point at an existing secret rather than putting a DSN in values.
+  existingSecret: workbench-database
+  urlKey: url
+
+redis:
+  existingSecret: workbench-redis
+  urlKey: url
+
+auth:
+  existingSecret: workbench-auth
+  signingKeyKey: jwt-signing-key
+  accessTokenTTL: 15m
+  refreshTokenTTL: 336h
+
+migrations:
+  # Runs as a pre-upgrade hook so a rollout never starts against an old schema.
+  enabled: true
+
+resources:
+  requests: {cpu: 200m, memory: 256Mi}
+  limits: {memory: 1Gi}
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile: {type: RuntimeDefault}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+networkPolicy:
+  enabled: true
+  # Egress to arbitrary API servers is the point of the product, so this is an
+  # allow-list rather than a deny-all.
+  allowedCIDRs: ["10.0.0.0/8"]
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+topologySpreadConstraints:
+  enabled: false
+  topologyKey: topology.kubernetes.io/zone
+
+# Grant the platform read and apply rights on the cluster it runs in, so the
+# local cluster can be a deploy target without storing a credential for it.
+# Every other cluster is reached with a stored kubeconfig or service account.
+localCluster:
+  enabled: false
+  # Namespaces this release may manage in its own cluster. Empty means
+  # cluster-wide, which is rarely what you want.
+  namespaces: []
+
+logLevel: info
+commitSha: ""

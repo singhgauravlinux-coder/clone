@@ -1,0 +1,32 @@
+{
+  "name": "manifest-workbench-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:yaml && npm run test:registry && npm run test:platform",
+    "test:yaml": "esbuild src/core/yaml/yaml.test.ts --bundle --platform=node --outfile=.tmp/yaml.test.cjs && node .tmp/yaml.test.cjs",
+    "test:registry": "esbuild src/core/registry.test.ts --bundle --platform=node --outfile=.tmp/registry.test.cjs && node .tmp/registry.test.cjs",
+    "test:platform": "esbuild src/platform/platform.test.ts --bundle --platform=node --loader:.tsx=tsx --outfile=.tmp/platform.test.cjs && node .tmp/platform.test.cjs"
+  },
+  "dependencies": {
+    "lucide-react": "^0.383.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.19",
+    "esbuild": "^0.21.5",
+    "postcss": "^8.4.39",
+    "tailwindcss": "^3.4.4",
+    "typescript": "^5.5.3",
+    "vite": "^5.3.3"
+  }
+}

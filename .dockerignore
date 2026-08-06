@@ -1,0 +1,12 @@
+# Keep the build context small and free of anything that could leak.
+**/node_modules
+**/dist
+**/.tmp
+**/coverage.out
+.git
+.github
+docs
+*.md
+!README.md
+**/.env
+**/*.kubeconfig

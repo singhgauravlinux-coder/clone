@@ -1,0 +1,99 @@
+# One reusable deploy. Both environments call it with different values, so
+# there is exactly one code path that can change a cluster.
+name: deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment: {required: true, type: string}
+      namespace:   {required: true, type: string}
+      release:     {required: true, type: string}
+      values:      {required: true, type: string}
+      digest:      {required: true, type: string}
+      url:         {required: true, type: string}
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.15.3
+
+      # Cluster access. KUBE_CONFIG is a base64 kubeconfig held as an
+      # environment secret, so staging and production credentials are separate
+      # and production's is gated by the same approval as the deploy.
+      #
+      # On EKS, GKE or AKS prefer federated OIDC and delete this step:
+      #   - uses: aws-actions/configure-aws-credentials@v4
+      #     with:
+      #       role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE }}
+      #       aws-region: eu-west-1
+      #   - run: aws eks update-kubeconfig --name ${{ vars.EKS_CLUSTER }}
+      - name: Configure cluster access
+        run: |
+          mkdir -p "$HOME/.kube"
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+          kubectl version --output=json | head -20
+
+      - name: Record the current revision
+        id: current
+        # Captured before the upgrade so the rollback step knows where to go
+        # back to, including on a first install where there is nothing to undo.
+        run: |
+          revision=$(helm status "${{ inputs.release }}" -n "${{ inputs.namespace }}" -o json 2>/dev/null \
+            | jq -r '.version // empty')
+          echo "revision=${revision:-0}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy
+        id: upgrade
+        run: |
+          helm upgrade --install "${{ inputs.release }}" deploy/helm \
+            --namespace "${{ inputs.namespace }}" --create-namespace \
+            --values "${{ inputs.values }}" \
+            --set image.digest="${{ inputs.digest }}" \
+            --set-string commitSha="${{ github.sha }}" \
+            --atomic --wait --timeout 10m
+        # --atomic rolls back automatically on failure. The explicit step below
+        # covers the case where the release succeeded but the smoke test did not.
+
+      - name: Smoke test
+        id: smoke
+        run: |
+          for attempt in $(seq 1 20); do
+            if curl -fsS --max-time 5 "${{ inputs.url }}/api/healthz" | grep -q '"status":"ok"'; then
+              echo "healthy after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "never reported healthy"
+          exit 1
+
+      - name: Roll back
+        if: failure() && steps.upgrade.outcome == 'success' && steps.current.outputs.revision != '0'
+        run: |
+          helm rollback "${{ inputs.release }}" "${{ steps.current.outputs.revision }}" \
+            -n "${{ inputs.namespace }}" --wait --timeout 10m
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ inputs.environment }}"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| digest | \`${{ inputs.digest }}\` |"
+            echo "| namespace | \`${{ inputs.namespace }}\` |"
+            echo "| result | ${{ job.status }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
