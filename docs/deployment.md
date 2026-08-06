@@ -25,11 +25,31 @@ That is deliberate: one place to review, one place to audit.
 ### 1. Lockfiles
 
 CI uses `npm ci` and `go mod download`, both of which need a committed lockfile.
-`frontend/package-lock.json` is in the repo. `backend/go.sum` is not — generate
-and commit it once:
+`frontend/package-lock.json` is in the repo. **`backend/go.sum` is not** —
+generate and commit it once, on a machine with network access:
 
 ```bash
-cd backend && go mod tidy && git add go.sum && git commit -m "add go.sum"
+cd backend
+go mod tidy
+git add go.sum go.mod && git commit -m "add go.sum"
+```
+
+Without it the backend job fails with `missing go.sum entry for module
+providing package …` on every import. CI has a fallback that runs `go mod tidy`
+itself and emits a warning annotation, so the pipeline is not blocked, but a
+generated-in-CI checksum file defeats the point of having one: the build is no
+longer reproducible, and a dependency substituted upstream would not be caught.
+Commit the file.
+
+### 1a. Action versions
+
+Every action is pinned to a major. Those majors move — `actions/checkout` is on
+v7, `docker/*` on v4–v7, `trivy-action` on v0.36.0 — and a pin that does not
+exist fails the run immediately with `unable to find version`. Check them when
+you fork:
+
+```bash
+gh api repos/actions/checkout/releases/latest --jq .tag_name
 ```
 
 ### 2. GitHub environments
